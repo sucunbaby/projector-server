@@ -84,6 +84,11 @@ import kotlin.concurrent.thread
 import kotlin.math.roundToLong
 import java.awt.Point as AwtPoint
 
+
+import org.jetbrains.projector.server.core.toService.ReportLog
+import org.jetbrains.projector.server.service.*
+import java.text.SimpleDateFormat
+
 @UseProjectorLoader
 class ProjectorServer private constructor(
   private val laterInvokator: LaterInvokator,
@@ -91,6 +96,7 @@ class ProjectorServer private constructor(
 ) {
   private val transports: MutableSet<ServerTransport> = ConcurrentHashMap<ServerTransport, Unit>().keySet(Unit)
 
+  private var eventCount = 0
   val wasStarted: Boolean
     get() {
       return transports.all { it.wasStarted }
@@ -157,6 +163,7 @@ class ProjectorServer private constructor(
     }
 
     override fun getInitialClientState(address: String?): ClientSettings {
+      System.setProperty(CUR_CLIENT_IP, address)
       return ConnectedClientSettings(connectionMillis = System.currentTimeMillis(), address = address)
     }
 
@@ -340,6 +347,11 @@ class ProjectorServer private constructor(
       message !is ClientRequestPingEvent
     ) {
       return
+    }
+
+    if (message is ClientMouseEvent || message is ClientWheelEvent || message is ClientKeyEvent || 
+      message is ClientKeyPressEvent || message is ClientRawKeyEvent || message is ClientClipboardEvent) {
+      eventCount++
     }
 
     Do exhaustive when (message) {
@@ -533,6 +545,13 @@ class ProjectorServer private constructor(
 
     val toServerHandshakeEvent = KotlinxJsonToServerHandshakeDecoder.decode(message)
 
+    // 用户未登陆时拒绝连接
+    val userinfo: String? = toServerHandshakeEvent.userInfo
+    if (userinfo == null || userinfo.isEmpty()) {
+      sendHandshakeFailureEvent("未检测到登录信息，请刷新重试，若无法解决，请加如流用户群：5721040")
+      return
+    }
+
     val hasWriteAccess = when (toServerHandshakeEvent.token) {
       getOption(TOKEN_ENV_NAME) -> true
       getOption(RO_TOKEN_ENV_NAME) -> false
@@ -657,6 +676,16 @@ class ProjectorServer private constructor(
       }
     }
 
+    System.setProperty(CUR_UNAME, userinfo)
+    System.setProperty(CUR_SERVER_IP, InetAddress.getLocalHost().hostAddress)
+    var clientType = if(toServerHandshakeEvent.appType.contains("client")) "client" else "web"
+    var appType = getIcodingApptype() + "-" + clientType
+    System.setProperty(CUR_APP_TYPE, appType)
+    logger.info { "Current user is  $userinfo" }
+    logger.info { "Current client ip is  ${System.getProperty(CUR_CLIENT_IP)}" }
+    logger.info { "Current server ip is  ${System.getProperty(CUR_SERVER_IP)}" }
+    logger.info { "Current app type is  ${System.getProperty(CUR_APP_TYPE)}" }
+
     clientEventHandler.updateClientsCount()
   }
 
@@ -702,6 +731,16 @@ class ProjectorServer private constructor(
     WebsocketServer.createTransportBuilders().forEach {
       addTransport(it.attachDefaultServerEventHandlers(clientEventHandler).build())
     }
+
+    Timer().schedule(object:TimerTask(){
+      override fun run() {
+        if (eventCount != 0) {
+          val report = ReportLog()
+          report.reportSecurityLog("idea.event.count", eventCount.toString())
+          eventCount = 0
+        }
+      }
+    }, Date(), 120000)
   }
 
 
@@ -903,6 +942,12 @@ class ProjectorServer private constructor(
     var lastStartedServer: ProjectorServer? = null
       private set
 
+    const val CUR_UNAME = "org.jetbrains.projector.server.uname"
+    const val CUR_CLIENT_IP = "org.jetbrains.projector.server.client.ip"
+    const val CUR_SERVER_IP = "org.jetbrains.projector.server.ip"
+    const val CUR_APP_TYPE = "org.jetbrains.projector.server.client.type"
+    const val ICODING_APP_NAME = "com.icoding.jetbrains.app.type"
+
     const val ENABLE_PROPERTY_NAME = "org.jetbrains.projector.server.enable"
     private const val HOST_PROPERTY_NAME_OLD = "org.jetbrains.projector.server.host"
     const val HOST_PROPERTY_NAME = "ORG_JETBRAINS_PROJECTOR_SERVER_HOST"
@@ -927,7 +972,8 @@ class ProjectorServer private constructor(
       val host = getOption(HOST_PROPERTY_NAME) ?: getOption(HOST_PROPERTY_NAME_OLD)
       return if (host != null) InetAddress.getByName(host) else getWildcardHostAddress()
     }
-
+    
+    fun getIcodingApptype() = System.getProperty(ICODING_APP_NAME) ?: "idea-c"
     fun getEnvPort() = (getOption(PORT_PROPERTY_NAME) ?: getOption(PORT_PROPERTY_NAME_OLD, DEFAULT_PORT)).toInt()
 
     private val LOCAL_ADDRESSES get() = getLocalAddresses(keepIpv6 = true).map { it.address }

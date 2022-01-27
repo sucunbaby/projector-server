@@ -56,6 +56,7 @@ dependencies {
   implementation("$projectorClientGroup:projector-server-core:$projectorClientVersion")
   implementation("$projectorClientGroup:projector-util-loading:$projectorClientVersion")
   implementation("$projectorClientGroup:projector-util-logging:$projectorClientVersion")
+  implementation("com.google.code.gson:gson:2.8.6")
   api(project(":projector-awt"))
 
   compileOnly("com.jetbrains.intellij.platform:code-style:$intellijPlatformVersion")
